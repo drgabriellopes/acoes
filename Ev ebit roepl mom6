@@ -1,0 +1,46 @@
+import quantopian.algorithm as algo
+import quantopian.optimize as opt
+from quantopian.pipeline import Pipeline
+from quantopian.pipeline.data import Fundamentals
+from quantopian.pipeline.factors import CustomFactor, Returns, ROE
+from quantopian.pipeline.filters import QTradableStocksUS
+from quantopian.pipeline.classifiers.fundamentals import Sector
+from quantopian.pipeline.data.builtin import USEquityPricing
+
+import numpy as np
+import pandas as pd
+
+class Momentum(CustomFactor):
+    inputs = [USEquityPricing.close]
+    window_length = 126
+
+    def compute(self, today, assets, out, close):
+        out[:] = (close[-1] - close[0]) / close[0]
+
+def initialize(context):
+    context.max_leverage = 1.0
+    context.max_positions = 20
+    context.rebalance_date = '1994-02-01'
+    context.end_date = '2023-02-01'
+    
+    schedule_function(rebalance, date_rules.month_end(days_offset=3), time_rules.market_open(), half_days=True)
+    
+def rebalance(context, data):
+    pipeline = Pipeline(
+        columns={
+            'ev_to_ebit': Fundamentals.ev_to_ebit.latest,
+            'roe_over_price_to_earnings': ROE.latest / Fundamentals.pe_ratio.latest,
+            'momentum': Momentum(inputs=[USEquityPricing.close]),
+        },
+        screen=QTradableStocksUS() & (Fundamentals.country_name.latest == 'Brazil')
+    )
+    context.output = algo.run_pipeline(pipeline, start_date=context.rebalance_date, end_date=context.end_date)
+    context.output.dropna(subset=['ev_to_ebit', 'roe_over_price_to_earnings', 'momentum'], inplace=True)
+    context.output['ev_to_ebit_percentile'] = context.output['ev_to_ebit'].rank(pct=True)
+    context.output['roe_over_price_to_earnings_percentile'] = context.output['roe_over_price_to_earnings'].rank(pct=True)
+    context.output = context.output.loc[(context.output['ev_to_ebit_percentile'] <= 0.10) & (context.output['roe_over_price_to_earnings_percentile'] <= 0.10)]
+    context.output = context.output.nlargest(20, 'momentum')
+    
+    target_weights = opt.TargetWeights(context.output.index, max_abs_weights=0.33)
+    constraints = [
+        opt.MaxGrossExposure(context.max
