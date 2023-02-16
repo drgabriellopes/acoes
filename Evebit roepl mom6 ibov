@@ -1,0 +1,43 @@
+import quantopian.algorithm as algo
+import quantopian.optimize as opt
+from quantopian.pipeline import Pipeline
+from quantopian.pipeline.data import Fundamentals
+from quantopian.pipeline.factors import CustomFactor, Returns, ROE
+from quantopian.pipeline.filters import QTradableStocksUS, AverageDollarVolume
+from quantopian.pipeline.classifiers.fundamentals import Sector
+from quantopian.pipeline.data.builtin import USEquityPricing
+import quantopian.pipeline.data.quandl as quandl
+
+import numpy as np
+import pandas as pd
+import pytz
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+class Momentum(CustomFactor):
+    inputs = [USEquityPricing.close]
+    window_length = 126
+
+    def compute(self, today, assets, out, close):
+        out[:] = (close[-1] - close[0]) / close[0]
+
+def initialize(context):
+    context.ibovespa = symbol('IBOV')
+    context.max_leverage = 1.0
+    context.max_positions = 20
+    context.rebalance_date = datetime(1994, 2, 1, 0, 0, 0, 0, pytz.UTC)
+    context.end_date = datetime(2023, 2, 1, 0, 0, 0, 0, pytz.UTC)
+    
+    context.investment_amount = 10000
+    context.portfolio_value = context.investment_amount
+    
+    schedule_function(rebalance, date_rules.month_end(days_offset=3), time_rules.market_open(), half_days=True)
+    
+def rebalance(context, data):
+    pipeline = Pipeline(
+        columns={
+            'ev_to_ebit': Fundamentals.ev_to_ebit.latest,
+            'roe_over_price_to_earnings': ROE.latest / Fundamentals.pe_ratio.latest,
+            'momentum': Momentum(inputs=[USEquityPricing.close]),
+        },
+        screen=QTradableStocksUS() & (Fundamentals.country_name.latest == 'Brazil') & (AverageDollarVolume(window_length=21) > 125000 * data.current(sid(
